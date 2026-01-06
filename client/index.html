@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Code Secret Extractor</title>
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 800px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        
+        h1 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+        
+        p {
+            color: #666;
+            margin-bottom: 30px;
+        }
+        
+        .upload-area {
+            border: 3px dashed #667eea;
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            margin-bottom: 30px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .upload-area:hover {
+            background: #f8f9ff;
+            border-color: #764ba2;
+        }
+        
+        .upload-area.dragover {
+            background: #f0f2ff;
+            border-color: #764ba2;
+        }
+        
+        input[type="file"] {
+            display: none;
+        }
+        
+        .upload-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+        
+        canvas {
+            display: none;
+        }
+        
+        .result {
+            display: none;
+            background: #f8f9ff;
+            border-radius: 15px;
+            padding: 30px;
+            margin-top: 30px;
+        }
+        
+        .result.show {
+            display: block;
+        }
+        
+        .result-item {
+            margin-bottom: 20px;
+        }
+        
+        .result-label {
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 8px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .result-value {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            word-break: break-all;
+            border: 1px solid #e0e0e0;
+        }
+        
+        .secret-value {
+            color: #e74c3c;
+            font-weight: 600;
+            font-size: 18px;
+        }
+        
+        .copy-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-top: 10px;
+            transition: all 0.3s;
+        }
+        
+        .copy-btn:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+        }
+        
+        .copy-btn.copied {
+            background: #27ae60;
+        }
+        
+        .code-snippet {
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            overflow-x: auto;
+        }
+        
+        .error {
+            color: #e74c3c;
+            background: #ffebee;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        
+        .paste-area {
+            margin-bottom: 20px;
+        }
+        
+        textarea {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 12px;
+            resize: vertical;
+            min-height: 100px;
+        }
+        
+        .btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+        
+        .btn:hover {
+            background: #764ba2;
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 QR Code Secret Extractor</h1>
+        <p>Upload your MFA QR code image or paste the base64 data to extract the secret</p>
+        
+        <div class="paste-area">
+            <textarea id="base64Input" placeholder="Paste base64 image data here (e.g., data:image/png;base64,iVBORw0KGgo...)"></textarea>
+            <button class="btn" onclick="decodeFromBase64()">Decode from Base64</button>
+        </div>
+        
+        <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">📤</div>
+            <h3>Drop QR code image here or click to upload</h3>
+            <p style="color: #999; margin-top: 10px;">Supports PNG, JPG, JPEG</p>
+            <input type="file" id="fileInput" accept="image/*">
+        </div>
+        
+        <canvas id="canvas"></canvas>
+        
+        <div class="result" id="result">
+            <h2 style="color: #667eea; margin-bottom: 20px;">✅ Extracted Data</h2>
+            
+            <div class="result-item">
+                <div class="result-label">Secret Key (IMPORTANT!)</div>
+                <div class="result-value secret-value" id="secretValue"></div>
+                <button class="copy-btn" onclick="copyToClipboard('secretValue')">Copy Secret</button>
+            </div>
+            
+            <div class="result-item">
+                <div class="result-label">Issuer</div>
+                <div class="result-value" id="issuerValue"></div>
+            </div>
+            
+            <div class="result-item">
+                <div class="result-label">Account Name</div>
+                <div class="result-value" id="accountValue"></div>
+            </div>
+            
+            <div class="result-item">
+                <div class="result-label">Full OTP URL</div>
+                <div class="result-value" id="urlValue"></div>
+                <button class="copy-btn" onclick="copyToClipboard('urlValue')">Copy URL</button>
+            </div>
+            
+            <div class="result-item">
+                <div class="result-label">Add to Your Backend</div>
+                <div class="code-snippet" id="codeSnippet"></div>
+                <button class="copy-btn" onclick="copyCode()">Copy Code</button>
+            </div>
+        </div>
+        
+        <div class="error" id="error" style="display: none;"></div>
+    </div>
+
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const result = document.getElementById('result');
+        const error = document.getElementById('error');
+
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file) handleFile(file);
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) handleFile(file);
+        });
+
+        function decodeFromBase64() {
+            const base64Input = document.getElementById('base64Input').value.trim();
+            if (!base64Input) {
+                showError('Please paste base64 image data');
+                return;
+            }
+            
+            const img = new Image();
+            img.onload = () => {
+                canvas.width = img.width;
+                canvas.height = img.height;
+                ctx.drawImage(img, 0, 0);
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                decodeQR(imageData);
+            };
+            img.onerror = () => {
+                showError('Invalid base64 image data');
+            };
+            img.src = base64Input;
+        }
+
+        function handleFile(file) {
+            if (!file.type.startsWith('image/')) {
+                showError('Please upload an image file');
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = new Image();
+                img.onload = () => {
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    decodeQR(imageData);
+                };
+                img.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function decodeQR(imageData) {
+            const code = jsQR(imageData.data, imageData.width, imageData.height);
+            
+            if (code) {
+                hideError();
+                parseOTPAuth(code.data);
+            } else {
+                showError('No QR code found in the image. Please try with a clearer image.');
+            }
+        }
+
+        function parseOTPAuth(url) {
+            try {
+                if (!url.startsWith('otpauth://')) {
+                    showError('Invalid OTP Auth URL');
+                    return;
+                }
+
+                const urlObj = new URL(url);
+                const type = urlObj.host.toLowerCase(); // totp | hotp
+                const label = decodeURIComponent(urlObj.pathname.substring(1));
+
+                const params = new URLSearchParams(urlObj.search);
+                console.log(params.get('algorithm') );
+                
+                
+                const secret = params.get('secret');
+                const issuer = params.get('issuer') || label.split(':')[0] || 'Unknown';
+                const accountName = label.includes(':') ? label.split(':')[1] : label;
+                
+                const digits = params.get('digits') || '6';
+                const period = params.get('period') || '30';
+                const algorithm = (params.get('algorithm') || 'SHA1').toLowerCase();
+                console.log(algorithm);
+                const counter = params.get('counter');
+
+                if (!secret) {
+                    showError('Secret not found in QR code');
+                    return;
+                }
+
+                displayResults({
+                    secret,
+                    issuer,
+                    accountName,
+                    url,
+                    digits,
+                    period,
+                    algorithm,
+                    type,
+                    counter
+                });
+
+            } catch (err) {
+                showError('Failed to parse QR code: ' + err.message);
+            }
+        }
+
+        function displayResults(data) {
+            document.getElementById('secretValue').textContent = data.secret;
+            document.getElementById('issuerValue').textContent = data.issuer;
+            document.getElementById('accountValue').textContent = data.accountName;
+            document.getElementById('urlValue').textContent = data.url;
+
+            const accountKey = data.issuer.toLowerCase().replace(/\s+/g, '_');
+
+            let extraFields = `
+        type: '${data.type}',
+        algorithm: '${data.algorithm}',`;
+
+            if (data.type === 'hotp' && data.counter) {
+                extraFields += `
+        counter: ${data.counter},`;
+            }
+
+            const codeSnippet = `// Add via POST /api/accounts
+        {
+        key: '${accountKey}',
+        name: '${data.issuer} - ${data.accountName}',
+        secret: '${data.secret}',
+        digits: ${data.digits},
+        period: ${data.period},${extraFields}
+        encrypt: true
+        }`;
+
+            document.getElementById('codeSnippet').textContent = codeSnippet;
+            document.getElementById('result').classList.add('show');
+        }
+        function copyToClipboard(elementId) {
+            const text = document.getElementById(elementId).textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = event.target;
+                const originalText = btn.textContent;
+                btn.textContent = '✓ Copied!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = originalText;
+                    btn.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        function copyCode() {
+            const text = document.getElementById('codeSnippet').textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = event.target;
+                btn.textContent = '✓ Copied!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = 'Copy Code';
+                    btn.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        function showError(message) {
+            error.textContent = message;
+            error.style.display = 'block';
+            result.classList.remove('show');
+        }
+
+        function hideError() {
+            error.style.display = 'none';
+        }
+    </script>
+</body>
+</html>

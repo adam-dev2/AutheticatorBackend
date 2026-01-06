@@ -1,0 +1,24 @@
+{
+  "name": "autheticatorbackend",
+  "version": "1.0.0",
+  "description": "This a Backend for Authenticator",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adam-dev2/AutheticatorBackend.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/adam-dev2/AutheticatorBackend/issues"
+  },
+  "homepage": "https://github.com/adam-dev2/AutheticatorBackend#readme",
+  "dependencies": {
+    "express": "^5.2.1",
+    "speakeasy": "^2.0.0"
+  }
+}
