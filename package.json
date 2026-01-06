@@ -18,7 +18,9 @@
   },
   "homepage": "https://github.com/adam-dev2/AutheticatorBackend#readme",
   "dependencies": {
+    "dotenv": "^17.2.3",
     "express": "^5.2.1",
+    "mongoose": "^9.1.2",
     "speakeasy": "^2.0.0"
   }
 }

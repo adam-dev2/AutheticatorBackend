@@ -1,4 +1,4 @@
-// server.js – Personal MFA Code Generator (FIXED)
+// server.js - Personal MFA Code Generator for Tines Workflows
 const express = require('express');
 const speakeasy = require('speakeasy');
 const crypto = require('crypto');
@@ -8,223 +8,250 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-/* =====================================================
-   🔐 CONFIG
-===================================================== */
+// Your MFA accounts storage (add your accounts here)
+const accounts = {
+  // Example format:
+  // 'google': {
+  //   name: 'My Google Account',
+  //   secret: 'YOUR_SECRET_KEY_HERE',
+  //   digits: 6,
+  //   period: 30,
+  //   algorithm: 'sha1'  // <-- IMPORTANT: Add this!
+  // }
+};
 
-// MUST be static or secrets break after restart
-if (!process.env.ENCRYPTION_KEY) {
-  console.warn('⚠️  ENCRYPTION_KEY not set. Secrets will break on restart.');
-}
-
-const ENCRYPTION_KEY = crypto
-  .createHash('sha256')
-  .update(process.env.ENCRYPTION_KEY || 'dev-secret')
-  .digest(); // 32 bytes
-
-
-/* =====================================================
-   🔧 HELPERS
-===================================================== */
-
-function normalizeBase32(secret) {
-  return secret.replace(/\s+/g, '').toUpperCase();
-}
+// Simple encryption for secrets (optional, but recommended)
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
 
 function encrypt(text) {
   const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(
-    'aes-256-cbc',
-    Buffer.from(ENCRYPTION_KEY, 'hex'),
-    iv
-  );
-  const encrypted = Buffer.concat([
-    cipher.update(text, 'utf8'),
-    cipher.final()
-  ]);
-  return `${iv.toString('hex')}:${encrypted.toString('hex')}`;
+  const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY.slice(0, 64), 'hex'), iv);
+  let encrypted = cipher.update(text);
+  encrypted = Buffer.concat([encrypted, cipher.final()]);
+  return iv.toString('hex') + ':' + encrypted.toString('hex');
 }
 
 function decrypt(text) {
-  const [ivHex, encryptedHex] = text.split(':');
-  const decipher = crypto.createDecipheriv(
-    'aes-256-cbc',
-    Buffer.from(ENCRYPTION_KEY, 'hex'),
-    Buffer.from(ivHex, 'hex')
-  );
-  return Buffer.concat([
-    decipher.update(Buffer.from(encryptedHex, 'hex')),
-    decipher.final()
-  ]).toString('utf8');
+  const parts = text.split(':');
+  const iv = Buffer.from(parts.shift(), 'hex');
+  const encryptedText = Buffer.from(parts.join(':'), 'hex');
+  const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY.slice(0, 64), 'hex'), iv);
+  let decrypted = decipher.update(encryptedText);
+  decrypted = Buffer.concat([decrypted, decipher.final()]);
+  return decrypted.toString();
 }
 
-/* =====================================================
-   🗄️ IN-MEMORY STORE
-===================================================== */
-
-const accounts = {};
-
-/* =====================================================
-   🔢 OTP GENERATOR
-===================================================== */
-
-function generateOTP(account) {
-  let secret = account.secret;
-  if (account.encrypted) secret = decrypt(secret);
-
-  secret = normalizeBase32(secret);
-
-  if (account.type === 'hotp') {
-    const token = speakeasy.hotp({
-      secret,
-      encoding: 'base32',
-      counter: account.counter || 0,
-      digits: account.digits
-    });
-
-    account.counter = (account.counter || 0) + 1;
-    return { code: token, type: 'hotp' };
-  }
-
-  const token = speakeasy.totp({
-    secret,
-    encoding: 'base32',
-    step: account.period,
-    digits: account.digits,
-    algorithm: account.algorithm || 'sha256', 
-    window: 1 // ⏱️ clock drift protection
-  });
-
-  const epoch = Math.floor(Date.now() / 1000);
-  const remaining = account.period - (epoch % account.period);
-
-  return {
-    code: token,
-    type: 'totp',
-    timeRemaining: remaining
-  };
-}
-
-/* =====================================================
-   🚀 ROUTES
-===================================================== */
-
-// 1️⃣ Get single code (Tines-friendly)
-app.get('/api/code/:key', (req, res) => {
-  const account = accounts[req.params.key];
-  if (!account) {
-    return res.status(404).json({
-      error: 'Account not found',
-      available: Object.keys(accounts)
-    });
-  }
-
+// 1. Get MFA code for specific account (THIS IS WHAT TINES WILL CALL)
+app.get('/api/code/:accountKey', (req, res) => {
   try {
-    const result = generateOTP(account);
-    res.json({
-      account: account.name,
-      ...result
-    });
-  } catch (e) {
-    res.status(500).json({ error: 'OTP generation failed' });
-  }
-});
-
-// 2️⃣ Get all codes
-app.get('/api/codes', (req, res) => {
-  const codes = Object.entries(accounts).map(([key, acc]) => {
-    try {
-      return { key, name: acc.name, ...generateOTP(acc) };
-    } catch {
-      return { key, name: acc.name, error: 'FAILED' };
+    const { accountKey } = req.params;
+    
+    const account = accounts[accountKey];
+    
+    if (!account) {
+      return res.status(404).json({ 
+        error: 'Account not found',
+        availableAccounts: Object.keys(accounts)
+      });
     }
-  });
-  res.json({ codes });
+    
+    // Check if secret is encrypted
+    let secret = account.secret;
+    if (account.encrypted) {
+      secret = decrypt(secret);
+    }
+    
+    // FIXED: Use the algorithm from account settings, default to sha1
+    const algorithm = (account.algorithm || 'sha1').toLowerCase();
+    
+    // Generate TOTP using RFC 6238 standard
+    const token = speakeasy.totp({
+      secret: secret,
+      encoding: 'base32',
+      algorithm: algorithm,  // <-- NOW USES CORRECT ALGORITHM!
+      digits: account.digits || 6,
+      step: account.period || 30,
+      window: 0
+    });
+    
+    // Calculate time remaining
+    const epoch = Math.round(new Date().getTime() / 1000.0);
+    const period = account.period || 30;
+    const timeRemaining = period - (epoch % period);
+    
+    res.json({
+      account: account.name || accountKey,
+      code: token,
+      algorithm: algorithm,
+      timeRemaining: timeRemaining,
+      expiresAt: new Date(Date.now() + (timeRemaining * 1000)).toISOString()
+    });
+  } catch (err) {
+    console.error('Error generating code:', err);
+    res.status(500).json({ error: 'Failed to generate code' });
+  }
 });
 
-// 3️⃣ Add account (AUTO detects TOTP/HOTP)
+// 2. Get ALL MFA codes at once
+app.get('/api/codes', (req, res) => {
+  try {
+    const epoch = Math.round(new Date().getTime() / 1000.0);
+    
+    const codes = Object.entries(accounts).map(([key, account]) => {
+      try {
+        let secret = account.secret;
+        if (account.encrypted) {
+          secret = decrypt(secret);
+        }
+        
+        const algorithm = (account.algorithm || 'sha1').toLowerCase();
+        
+        const token = speakeasy.totp({
+          secret: secret,
+          encoding: 'base32',
+          algorithm: algorithm,  // <-- FIXED HERE TOO
+          digits: account.digits || 6,
+          step: account.period || 30,
+          window: 0
+        });
+        
+        const period = account.period || 30;
+        const timeRemaining = period - (epoch % period);
+        
+        return {
+          key: key,
+          name: account.name || key,
+          code: token,
+          algorithm: algorithm,
+          timeRemaining: timeRemaining
+        };
+      } catch (err) {
+        return {
+          key: key,
+          name: account.name || key,
+          error: 'Failed to generate code'
+        };
+      }
+    });
+    
+    res.json({ codes });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 3. Add new account (for easy setup)
 app.post('/api/accounts', (req, res) => {
-  const {
-    key,
-    name,
-    secret,
-    digits = 6,
-    period = 30,
-    type = 'totp',
-    algorithm = 'sha256',
-    encrypt: shouldEncrypt = true
-  } = req.body;
-
-  if (!key || !secret) {
-    return res.status(400).json({ error: 'key and secret required' });
+  try {
+    const { key, name, secret, digits, period, algorithm, encrypt: shouldEncrypt } = req.body;
+    
+    if (!key || !secret) {
+      return res.status(400).json({ error: 'key and secret are required' });
+    }
+    
+    if (accounts[key]) {
+      return res.status(409).json({ error: 'Account already exists' });
+    }
+    
+    // Normalize algorithm
+    const normalizedAlgorithm = (algorithm || 'sha1').toLowerCase();
+    
+    // Validate secret by trying to generate a code
+    try {
+      speakeasy.totp({
+        secret: secret,
+        encoding: 'base32',
+        algorithm: normalizedAlgorithm
+      });
+    } catch (err) {
+      return res.status(400).json({ error: 'Invalid secret key' });
+    }
+    
+    accounts[key] = {
+      name: name || key,
+      secret: shouldEncrypt ? encrypt(secret) : secret,
+      encrypted: shouldEncrypt || false,
+      digits: digits || 6,
+      period: period || 30,
+      algorithm: normalizedAlgorithm,  // <-- STORE THE ALGORITHM!
+      addedAt: new Date().toISOString()
+    };
+    
+    res.status(201).json({
+      message: 'Account added successfully',
+      key: key,
+      name: accounts[key].name,
+      algorithm: normalizedAlgorithm
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
   }
-
-  if (accounts[key]) {
-    return res.status(409).json({ error: 'Account exists' });
-  }
-
-  const cleanSecret = normalizeBase32(secret);
-
-  // Validate secret
-  speakeasy.totp({ secret: cleanSecret, encoding: 'base32' });
-
-  accounts[key] = {
-    name: name || key,
-    secret: shouldEncrypt ? encrypt(cleanSecret) : cleanSecret,
-    encrypted: shouldEncrypt,
-    digits,
-    period,
-    type,
-    algorithm: algorithm.toLowerCase(),
-    addedAt: new Date().toISOString()
-  };
-
-  res.status(201).json({ message: 'Account added', key });
 });
 
-// 4️⃣ Debug endpoint (USE THIS)
-app.get('/api/debug/:key', (req, res) => {
-  const acc = accounts[req.params.key];
-  if (!acc) return res.status(404).json({ error: 'Not found' });
-
-  let secret = acc.encrypted ? decrypt(acc.secret) : acc.secret;
-
-  res.json({
-    normalizedSecret: normalizeBase32(secret),
-    serverTime: new Date().toISOString(),
-    otp: generateOTP(acc)
-  });
-});
-
-// 5️⃣ List accounts
+// 4. List all accounts (without secrets)
 app.get('/api/accounts', (req, res) => {
-  res.json({
-    total: Object.keys(accounts).length,
-    accounts: Object.entries(accounts).map(([k, v]) => ({
-      key: k,
-      name: v.name,
-      type: v.type,
-      digits: v.digits,
-      period: v.period
-    }))
+  try {
+    const accountList = Object.entries(accounts).map(([key, account]) => ({
+      key: key,
+      name: account.name || key,
+      digits: account.digits || 6,
+      period: account.period || 30,
+      algorithm: account.algorithm || 'sha1',
+      encrypted: account.encrypted || false,
+      addedAt: account.addedAt || 'N/A'
+    }));
+    
+    res.json({
+      accounts: accountList,
+      total: accountList.length
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// 5. Delete account
+app.delete('/api/accounts/:key', (req, res) => {
+  try {
+    const { key } = req.params;
+    
+    if (!accounts[key]) {
+      return res.status(404).json({ error: 'Account not found' });
+    }
+    
+    delete accounts[key];
+    
+    res.json({
+      message: 'Account deleted successfully',
+      key: key
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ 
+    status: 'ok',
+    accounts: Object.keys(accounts).length,
+    timestamp: new Date().toISOString()
   });
 });
 
-// 6️⃣ Delete
-app.delete('/api/accounts/:key', (req, res) => {
-  delete accounts[req.params.key];
-  res.json({ deleted: req.params.key });
-});
-
-// Health
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
-});
-
-/* =====================================================
-   🟢 START
-===================================================== */
-
+// Start server
 app.listen(PORT, () => {
-  console.log(`🔐 MFA Generator running → http://localhost:${PORT}`);
+  console.log(`\n🔐 Personal MFA Code Generator`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`\n📋 Quick Start:`);
+  console.log(`   GET  /api/code/:accountKey  - Get MFA code for Tines`);
+  console.log(`   GET  /api/codes             - Get all codes`);
+  console.log(`   POST /api/accounts          - Add new account`);
+  console.log(`\n💡 Example Tines usage:`);
+  console.log(`   curl http://localhost:${PORT}/api/code/google`);
+  console.log(`\n📊 Available accounts: ${Object.keys(accounts).length}`);
+  if (Object.keys(accounts).length > 0) {
+    console.log(`   ${Object.keys(accounts).join(', ')}`);
+  }
+  console.log('');
 });
