@@ -15,13 +15,8 @@ const accounts = {
   //   name: 'My Google Account',
   //   secret: 'YOUR_SECRET_KEY_HERE',
   //   digits: 6,
-  //   period: 30
-  // },
-  // 'github': {
-  //   name: 'GitHub',
-  //   secret: 'ANOTHER_SECRET_KEY',
-  //   digits: 6,
-  //   period: 30
+  //   period: 30,
+  //   algorithm: 'sha1'  // <-- IMPORTANT: Add this!
   // }
 };
 
@@ -66,14 +61,17 @@ app.get('/api/code/:accountKey', (req, res) => {
       secret = decrypt(secret);
     }
     
-    // Generate TOTP using RFC 6238 standard (same as Google/Microsoft Authenticator)
+    // FIXED: Use the algorithm from account settings, default to sha1
+    const algorithm = (account.algorithm || 'sha1').toLowerCase();
+    
+    // Generate TOTP using RFC 6238 standard
     const token = speakeasy.totp({
       secret: secret,
       encoding: 'base32',
-      algorithm: 'sha1',  // Standard TOTP uses SHA1 (same as Google/MS Authenticator)
+      algorithm: algorithm,  // <-- NOW USES CORRECT ALGORITHM!
       digits: account.digits || 6,
       step: account.period || 30,
-      window: 0  // No time window tolerance for exact matching
+      window: 0
     });
     
     // Calculate time remaining
@@ -84,6 +82,7 @@ app.get('/api/code/:accountKey', (req, res) => {
     res.json({
       account: account.name || accountKey,
       code: token,
+      algorithm: algorithm,
       timeRemaining: timeRemaining,
       expiresAt: new Date(Date.now() + (timeRemaining * 1000)).toISOString()
     });
@@ -105,10 +104,12 @@ app.get('/api/codes', (req, res) => {
           secret = decrypt(secret);
         }
         
+        const algorithm = (account.algorithm || 'sha1').toLowerCase();
+        
         const token = speakeasy.totp({
           secret: secret,
           encoding: 'base32',
-          algorithm: 'sha1',  // Standard TOTP uses SHA1
+          algorithm: algorithm,  // <-- FIXED HERE TOO
           digits: account.digits || 6,
           step: account.period || 30,
           window: 0
@@ -121,6 +122,7 @@ app.get('/api/codes', (req, res) => {
           key: key,
           name: account.name || key,
           code: token,
+          algorithm: algorithm,
           timeRemaining: timeRemaining
         };
       } catch (err) {
@@ -141,7 +143,7 @@ app.get('/api/codes', (req, res) => {
 // 3. Add new account (for easy setup)
 app.post('/api/accounts', (req, res) => {
   try {
-    const { key, name, secret, digits, period, encrypt: shouldEncrypt } = req.body;
+    const { key, name, secret, digits, period, algorithm, encrypt: shouldEncrypt } = req.body;
     
     if (!key || !secret) {
       return res.status(400).json({ error: 'key and secret are required' });
@@ -151,12 +153,15 @@ app.post('/api/accounts', (req, res) => {
       return res.status(409).json({ error: 'Account already exists' });
     }
     
-    // Validate secret by trying to generate a code (RFC 6238 standard)
+    // Normalize algorithm
+    const normalizedAlgorithm = (algorithm || 'sha1').toLowerCase();
+    
+    // Validate secret by trying to generate a code
     try {
       speakeasy.totp({
         secret: secret,
         encoding: 'base32',
-        algorithm: 'sha1'
+        algorithm: normalizedAlgorithm
       });
     } catch (err) {
       return res.status(400).json({ error: 'Invalid secret key' });
@@ -168,13 +173,15 @@ app.post('/api/accounts', (req, res) => {
       encrypted: shouldEncrypt || false,
       digits: digits || 6,
       period: period || 30,
+      algorithm: normalizedAlgorithm,  // <-- STORE THE ALGORITHM!
       addedAt: new Date().toISOString()
     };
     
     res.status(201).json({
       message: 'Account added successfully',
       key: key,
-      name: accounts[key].name
+      name: accounts[key].name,
+      algorithm: normalizedAlgorithm
     });
   } catch (err) {
     res.status(500).json({ error: 'Server error' });
@@ -189,6 +196,7 @@ app.get('/api/accounts', (req, res) => {
       name: account.name || key,
       digits: account.digits || 6,
       period: account.period || 30,
+      algorithm: account.algorithm || 'sha1',
       encrypted: account.encrypted || false,
       addedAt: account.addedAt || 'N/A'
     }));
