@@ -3,12 +3,16 @@ const express = require('express');
 const mongoose = require('mongoose');
 const speakeasy = require('speakeasy');
 const crypto = require('crypto');
+const jsQR = require('jsqr')
+const {createCanvas,loadImage} = require('canvas')
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
+
 
 // MongoDB Connection
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/mfa-authenticator';
@@ -40,6 +44,99 @@ function decrypt(text) {
   decrypted = Buffer.concat([decrypted, decipher.final()]);
   return decrypted.toString();
 }
+
+function parseOTPAuth(url) {
+  if (!url.startsWith("otpauth://")) {
+    throw new Error("Invalid OTP Auth URL");
+  }
+
+  const urlObj = new URL(url);
+  const type = urlObj.host.toLowerCase(); // totp | hotp
+  const label = decodeURIComponent(urlObj.pathname.substring(1));
+
+  const params = new URLSearchParams(urlObj.search);
+
+  const secret = params.get("secret");
+  if (!secret) throw new Error("Secret not found");
+
+  const issuer = params.get("issuer") || label.split(":")[0];
+  const accountName = label.includes(":")
+    ? label.split(":")[1]
+    : label;
+
+  return {
+    secret,
+    issuer,
+    accountName,
+    type,
+    algorithm: (params.get("algorithm") || "SHA1").toLowerCase(),
+    digits: Number(params.get("digits") || 6),
+    period: Number(params.get("period") || 30),
+    counter: params.get("counter") || null,
+    otpAuthUrl: url
+  };
+}
+
+
+
+/**
+ * POST /api/extract-secret
+ * Payload:
+ * {
+ *   "image": "data:image/png;base64,iVBORw0KGgo..."
+ * }
+ */
+app.post("/api/extract-secret", async (req, res) => {
+  try {
+    const { image } = req.body;
+
+    if (!image || !image.startsWith("data:image")) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid or missing base64 image"
+      });
+    }
+
+    // Load image
+    const img = await loadImage(image);
+
+    const canvas = createCanvas(img.width, img.height);
+    const ctx = canvas.getContext("2d");
+
+    ctx.drawImage(img, 0, 0);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    // Decode QR
+    const qr = jsQR(
+      imageData.data,
+      imageData.width,
+      imageData.height
+    );
+
+    if (!qr) {
+      return res.status(422).json({
+        success: false,
+        error: "No QR code found"
+      });
+    }
+
+    // Parse OTPAUTH
+    const parsed = parseOTPAuth(qr.data);
+
+    return res.json({
+      success: true,
+      ...parsed
+    });
+
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
 
 // 1. Get MFA code for specific account (THIS IS WHAT TINES WILL CALL)
 app.get('/api/code/:accountKey', async (req, res) => {
@@ -320,3 +417,6 @@ app.listen(PORT, async () => {
   
   console.log('');
 });
+
+
+
